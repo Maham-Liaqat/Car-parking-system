@@ -1,4 +1,11 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+// In production we can just hit the same host under /api; when
+// VITE_API_BASE_URL is defined we respect it (useful for local dev or
+// external API), otherwise fall back to a relative path when building for
+// prod.  On dev we default to localhost:4000 which is what the local
+// backend uses.
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD ? "" : "http://localhost:4000");
 
 export interface LoginResponse {
   token: string;
