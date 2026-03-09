@@ -84,7 +84,12 @@ function requireRole(roles) {
 
 // --- Auth routes ---
 
-app.post('/api/auth/login', (req, res) => {
+// when deploying to Vercel, the entire express app is mounted under
+// `/api` already, so we must avoid double-prefixing.  determine the base
+// path dynamically.
+const BASE_PATH = process.env.VERCEL ? '' : '/api';
+
+app.post(`${BASE_PATH}/auth/login`, (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
@@ -126,7 +131,7 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
-app.get('/api/auth/me', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/auth/me`, authMiddleware, (req, res) => {
   const staff = db
     .prepare(
       'SELECT id, name, email, role, carpark_id FROM staff_users WHERE id = ? AND is_active = 1'
@@ -146,7 +151,7 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
 
 // --- Customer types (Short-Term, Long-Term, Annual etc.) ---
 
-app.get('/api/customer-types', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/customer-types`, authMiddleware, (req, res) => {
   const carparkId = req.query.carparkId || req.user.carparkId;
   if (!carparkId) return res.status(400).json({ error: 'carparkId is required' });
   const rows = db
@@ -163,7 +168,7 @@ app.get('/api/customer-types', authMiddleware, (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/customer-types', authMiddleware, requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+app.post(`${BASE_PATH}/customer-types`, authMiddleware, requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const carparkId = req.body.carparkId || req.user.carparkId;
   if (!carparkId) return res.status(400).json({ error: 'carparkId is required' });
 
@@ -219,7 +224,7 @@ app.post('/api/customer-types', authMiddleware, requireRole(['ADMIN', 'MANAGER']
 
 // --- Customers ---
 
-app.get('/api/customers', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/customers`, authMiddleware, (req, res) => {
   const carparkId = req.query.carparkId || req.user.carparkId;
   const search = (req.query.search || '').toString().toLowerCase();
   const typeName = req.query.type;
@@ -265,7 +270,7 @@ app.get('/api/customers', authMiddleware, (req, res) => {
   res.json(mapped);
 });
 
-app.post('/api/customers', authMiddleware, (req, res) => {
+app.post(`${BASE_PATH}/customers`, authMiddleware, (req, res) => {
   // Debug: log incoming body and user for troubleshooting 400s
   console.log('[POST /api/customers] body=', req.body, 'user=', req.user);
 
@@ -360,7 +365,7 @@ app.post('/api/customers', authMiddleware, (req, res) => {
   }
 });
 
-app.put('/api/customers/:id', authMiddleware, (req, res) => {
+app.put(`${BASE_PATH}/customers/:id`, authMiddleware, (req, res) => {
   const carparkId = req.user.carparkId;
   const id = Number(req.params.id);
   const { name, email, phone, license_plate, customer_type_name, status } = req.body || {};
@@ -423,7 +428,7 @@ app.put('/api/customers/:id', authMiddleware, (req, res) => {
   });
 });
 
-app.delete('/api/customers/:id', authMiddleware, (req, res) => {
+app.delete(`${BASE_PATH}/customers/:id`, authMiddleware, (req, res) => {
   const carparkId = req.user.carparkId;
   const id = Number(req.params.id);
   const info = db
@@ -435,7 +440,7 @@ app.delete('/api/customers/:id', authMiddleware, (req, res) => {
 
 // --- Parking sessions ---
 
-app.get('/api/sessions', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/sessions`, authMiddleware, (req, res) => {
   const carparkId = req.query.carparkId || req.user.carparkId;
   const status = req.query.status || 'ALL';
   const search = (req.query.search || '').toString().toLowerCase();
@@ -502,7 +507,7 @@ app.get('/api/sessions', authMiddleware, (req, res) => {
   });
 });
 
-app.post('/api/sessions', authMiddleware, (req, res) => {
+app.post(`${BASE_PATH}/sessions`, authMiddleware, (req, res) => {
   const carparkId = req.body.carparkId || req.user.carparkId;
   if (!carparkId) return res.status(400).json({ error: 'carparkId is required' });
 
@@ -547,7 +552,7 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
   });
 });
 
-app.post('/api/sessions/:id/checkout', authMiddleware, (req, res) => {
+app.post(`${BASE_PATH}/sessions/:id/checkout`, authMiddleware, (req, res) => {
   const carparkId = req.user.carparkId;
   const id = Number(req.params.id);
   const paymentMethod = req.body?.payment_method || 'ON_ACCOUNT';
@@ -641,7 +646,7 @@ app.post('/api/sessions/:id/checkout', authMiddleware, (req, res) => {
 
 // --- Dashboard metrics ---
 
-app.get('/api/dashboard/summary', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/dashboard/summary`, authMiddleware, (req, res) => {
   const carparkId = req.query.carparkId || req.user.carparkId;
   if (!carparkId) return res.status(400).json({ error: 'carparkId is required' });
 
@@ -721,7 +726,7 @@ app.get('/api/dashboard/summary', authMiddleware, (req, res) => {
 
 // --- Reports + export ---
 
-app.get('/api/reports/summary', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/reports/summary`, authMiddleware, (req, res) => {
   try {
     const carparkId = req.query.carparkId || req.user.carparkId;
     const period = req.query.period || 'This Month';
@@ -861,7 +866,7 @@ app.get('/api/reports/summary', authMiddleware, (req, res) => {
   }
 });
 
-app.get('/api/reports/export', authMiddleware, (req, res) => {
+app.get(`${BASE_PATH}/reports/export`, authMiddleware, (req, res) => {
   const carparkId = req.query.carparkId || req.user.carparkId;
   const format = (req.query.format || 'csv').toString().toLowerCase();
   const period = req.query.period || 'This Month';
@@ -1129,7 +1134,7 @@ app.get('/api/reports/export', authMiddleware, (req, res) => {
 // --- Scheduler testing endpoint ---
 
 app.post(
-  '/api/dev/run-statement-job',
+  `${BASE_PATH}/dev/run-statement-job`,
   authMiddleware,
   requireRole(['ADMIN']),
   async (req, res) => {
@@ -1139,7 +1144,7 @@ app.post(
 );
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get(`${BASE_PATH}/health`, (req, res) => {
   res.json({ status: 'ok' });
 });
 
