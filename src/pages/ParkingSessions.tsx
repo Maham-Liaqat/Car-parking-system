@@ -1,13 +1,16 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, LogOut as CheckOutIcon, X } from "lucide-react";
+import { Search, Plus, LogOut as CheckOutIcon } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
+import { validateCustomerForm } from "@/lib/schemas";
+import { useCustomerForm } from "@/hooks/useCustomerForm";
+import { useCustomerTypes } from "@/hooks/useCustomerTypes";
 
 interface Customer {
   id: number;
@@ -50,11 +53,8 @@ const ParkingSessions = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [formName, setFormName] = useState("");
-  const [formPlate, setFormPlate] = useState("");
-  const [formPhone, setFormPhone] = useState("");
-  const [formType, setFormType] = useState("Short-Term");
-  const [customerTypes, setCustomerTypes] = useState<string[]>(["Short-Term", "Long-Term", "Annual"]);
+  const { customerTypes } = useCustomerTypes();
+  const { formData, setName, setPlate, setPhone, setType, reset } = useCustomerForm(customerTypes[0]);
   const queryClient = useQueryClient();
 
   const { data: sessionData, isLoading } = useQuery<{ active: ActiveSession[]; completed: CompletedSession[] }>({
@@ -67,30 +67,29 @@ const ParkingSessions = () => {
     queryFn: () => apiFetch<Customer[]>("/api/customers"),
   });
 
-  // Load customer types
-  useEffect(() => {
-    apiFetch<any[]>("/api/customer-types")
-      .then((rows) => {
-        const names = rows.map((r) => r.name).sort();
-        setCustomerTypes(names);
-        if (names.length > 0) setFormType(names[0]);
-      })
-      .catch(() => {
-        // ignore, keep defaults
-      });
-  }, []);
-
-  const activeSessions = sessionData?.active || [];
-  const completedSessions = sessionData?.completed || [];
+  const activeSessions = useMemo(
+    () => sessionData?.active || [],
+    [sessionData?.active]
+  );
+  const completedSessions = useMemo(
+    () => sessionData?.completed || [],
+    [sessionData?.completed]
+  );
 
   // Filter sessions for display
-  const q = search.toLowerCase();
-  const filteredActive = activeSessions.filter(
-    (s) => s.customer.toLowerCase().includes(q) || s.plate.toLowerCase().includes(q)
-  );
-  const filteredCompleted = completedSessions.filter(
-    (s) => s.customer.toLowerCase().includes(q) || s.plate.toLowerCase().includes(q)
-  );
+  const filteredActive = useMemo(() => {
+    const q = search.toLowerCase();
+    return activeSessions.filter(
+      (s) => s.customer.toLowerCase().includes(q) || s.plate.toLowerCase().includes(q)
+    );
+  }, [search, activeSessions]);
+
+  const filteredCompleted = useMemo(() => {
+    const q = search.toLowerCase();
+    return completedSessions.filter(
+      (s) => s.customer.toLowerCase().includes(q) || s.plate.toLowerCase().includes(q)
+    );
+  }, [search, completedSessions]);
 
   // Search customers by name, phone, or plate
   const searchResults = useMemo(() => {
@@ -121,19 +120,35 @@ const ParkingSessions = () => {
       setSearchQuery("");
       setSelectedCustomer(null);
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to create session.");
+    onError: (err: Error) => {
+      const message = err instanceof ApiError ? err.message : "Failed to create session.";
+      toast.error(message);
     },
   });
 
   const createCustomerMutation = useMutation({
     mutationFn: async () => {
+      const validation = validateCustomerForm({
+        name: formData.name,
+        email: `${formData.name.toLowerCase().replace(/\s+/g, '.')}@temp.local`,
+        plate: formData.plate,
+        phone: formData.phone,
+        type: formData.type,
+      });
+
+      if (!validation.isValid) {
+        const errors = Object.entries(validation.errors);
+        if (errors.length > 0) {
+          throw new Error(errors[0][1]?.[0] || "Please check your input");
+        }
+      }
+
       const payload = {
-        name: formName.trim(),
-        email: `${formName.toLowerCase().replace(/\s+/g, '.')}@temp.local`,
-        phone: formPhone.trim() || undefined,
-        license_plate: formPlate.trim().toUpperCase(),
-        customer_type_name: formType,
+        name: formData.name,
+        email: `${formData.name.toLowerCase().replace(/\s+/g, '.')}@temp.local`,
+        phone: formData.phone || undefined,
+        license_plate: formData.plate,
+        customer_type_name: formData.type,
       };
       return apiFetch<Customer>("/api/customers", {
         method: "POST",
@@ -145,16 +160,14 @@ const ParkingSessions = () => {
       // Auto check-in the newly created customer
       checkInMutation.mutate(newCustomer);
       // Reset form
-      setFormName("");
-      setFormPlate("");
-      setFormPhone("");
-      setFormType(customerTypes[0] || "Short-Term");
+      reset();
       setShowCreateForm(false);
       // Refresh customers list
       queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to create customer.");
+    onError: (err: Error) => {
+      const message = err instanceof ApiError ? err.message : "Failed to create customer.";
+      toast.error(message);
     },
   });
 
@@ -170,14 +183,14 @@ const ParkingSessions = () => {
       queryClient.invalidateQueries({ queryKey: ["sessions"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to check out.");
+    onError: (err: Error) => {
+      const message = err instanceof ApiError ? err.message : "Failed to check out.";
+      toast.error(message);
     },
   });
 
-  const handleCheckOut = (index: number) => {
-    const session = activeSessions[index];
-    checkoutMutation.mutate(session.id);
+  const handleCheckOut = (id: number) => {
+    checkoutMutation.mutate(id);
   };
 
   const handleSelectCustomer = (customer: Customer) => {
@@ -194,13 +207,6 @@ const ParkingSessions = () => {
     setShowCheckInModal(true);
     setSelectedCustomer(null);
     setSearchQuery("");
-  };
-
-  const handleCloseModal = () => {
-    setShowCheckInModal(false);
-    setSelectedCustomer(null);
-    setSearchQuery("");
-    setShowCreateForm(false);
   };
 
   return (
@@ -243,24 +249,24 @@ const ParkingSessions = () => {
 
           {/* Mobile Cards */}
           <div className="block sm:hidden space-y-3">
-            {filteredActive.map((s) => {
-              const realIdx = activeSessions.indexOf(s);
-              return (
-                <div key={s.plate + realIdx} className="bg-card rounded-xl border border-border p-4 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-foreground">{s.customer}</p>
-                    <span className="badge-active">{s.status}</span>
-                  </div>
-                  <div className="flex gap-4 text-sm mb-3">
-                    <div><span className="text-xs text-muted-foreground">Plate</span><p className="font-mono text-muted-foreground">{s.plate}</p></div>
-                    <div><span className="text-xs text-muted-foreground">Entry</span><p className="text-foreground">{s.entry}</p></div>
-                  </div>
-                  <button onClick={() => handleCheckOut(realIdx)} className="w-full inline-flex items-center justify-center gap-2 h-8 px-3 rounded-lg text-sm font-medium border border-border bg-card hover:bg-accent transition-colors text-foreground">
-                    <CheckOutIcon className="w-3.5 h-3.5" /> Check Out
-                  </button>
+            {filteredActive.map((s) => (
+              <div key={s.id} className="bg-card rounded-xl border border-border p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-medium text-foreground">{s.customer}</p>
+                  <span className="badge-active">{s.status}</span>
                 </div>
-              );
-            })}
+                <div className="flex gap-4 text-sm mb-3">
+                  <div><span className="text-xs text-muted-foreground">Plate</span><p className="font-mono text-muted-foreground">{s.plate}</p></div>
+                  <div><span className="text-xs text-muted-foreground">Entry</span><p className="text-foreground">{s.entry}</p></div>
+                </div>
+                <button
+                  onClick={() => handleCheckOut(s.id)}
+                  className="w-full inline-flex items-center justify-center gap-2 h-8 px-3 rounded-lg text-sm font-medium border border-border bg-card hover:bg-accent transition-colors text-foreground"
+                >
+                  <CheckOutIcon className="w-3.5 h-3.5" /> Check Out
+                </button>
+              </div>
+            ))}
           </div>
 
           {/* Desktop Table */}
@@ -277,22 +283,22 @@ const ParkingSessions = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredActive.map((s) => {
-                    const realIdx = activeSessions.indexOf(s);
-                    return (
-                      <tr key={s.plate + realIdx} className="border-b border-border last:border-0 table-row-hover">
-                        <td className="px-6 py-3.5 text-sm font-medium text-foreground">{s.customer}</td>
-                        <td className="px-4 py-3.5 text-sm font-mono text-muted-foreground">{s.plate}</td>
-                        <td className="px-4 py-3.5 text-sm text-foreground">{s.entry}</td>
-                        <td className="px-4 py-3.5"><span className="badge-active">{s.status}</span></td>
-                        <td className="px-4 py-3.5 text-right">
-                          <button onClick={() => handleCheckOut(realIdx)} className="inline-flex items-center gap-2 h-8 px-3 rounded-lg text-sm font-medium border border-border bg-card hover:bg-accent transition-colors text-foreground">
-                            <CheckOutIcon className="w-3.5 h-3.5" /> Check Out
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {filteredActive.map((s) => (
+                    <tr key={s.id} className="border-b border-border last:border-0 table-row-hover">
+                      <td className="px-6 py-3.5 text-sm font-medium text-foreground">{s.customer}</td>
+                      <td className="px-4 py-3.5 text-sm font-mono text-muted-foreground">{s.plate}</td>
+                      <td className="px-4 py-3.5 text-sm text-foreground">{s.entry}</td>
+                      <td className="px-4 py-3.5"><span className="badge-active">{s.status}</span></td>
+                      <td className="px-4 py-3.5 text-right">
+                        <button
+                          onClick={() => handleCheckOut(s.id)}
+                          className="inline-flex items-center gap-2 h-8 px-3 rounded-lg text-sm font-medium border border-border bg-card hover:bg-accent transition-colors text-foreground"
+                        >
+                          <CheckOutIcon className="w-3.5 h-3.5" /> Check Out
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -309,8 +315,8 @@ const ParkingSessions = () => {
 
           {/* Mobile Cards */}
           <div className="block sm:hidden space-y-3">
-            {filteredCompleted.map((s, i) => (
-              <div key={s.plate + i} className="bg-card rounded-xl border border-border p-4 shadow-sm space-y-2">
+            {filteredCompleted.map((s) => (
+              <div key={s.id} className="bg-card rounded-xl border border-border p-4 shadow-sm space-y-2">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium text-foreground">{s.customer}</p>
                   <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium" style={paymentBadge(s.payment)}>{s.payment}</span>
@@ -342,8 +348,8 @@ const ParkingSessions = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredCompleted.map((s, i) => (
-                      <tr key={s.plate + i} className="border-b border-border last:border-0 table-row-hover">
+                    {filteredCompleted.map((s) => (
+                      <tr key={s.id} className="border-b border-border last:border-0 table-row-hover">
                         <td className="px-6 py-3.5 text-sm font-medium text-foreground">{s.customer}</td>
                         <td className="px-4 py-3.5 text-sm font-mono text-muted-foreground">{s.plate}</td>
                         <td className="px-4 py-3.5 text-sm text-foreground hidden lg:table-cell">{s.entry}</td>
@@ -380,8 +386,8 @@ const ParkingSessions = () => {
                       <Input
                         id="new-name"
                         placeholder="Enter customer name"
-                        value={formName}
-                        onChange={(e) => setFormName(e.target.value)}
+                        value={formData.name}
+                        onChange={(e) => setName(e.target.value)}
                         className="mt-1"
                       />
                     </div>
@@ -391,8 +397,8 @@ const ParkingSessions = () => {
                       <Input
                         id="new-plate"
                         placeholder="e.g., ABC-123"
-                        value={formPlate}
-                        onChange={(e) => setFormPlate(e.target.value)}
+                        value={formData.plate}
+                        onChange={(e) => setPlate(e.target.value)}
                         className="mt-1"
                       />
                     </div>
@@ -402,8 +408,8 @@ const ParkingSessions = () => {
                       <Input
                         id="new-phone"
                         placeholder="(optional)"
-                        value={formPhone}
-                        onChange={(e) => setFormPhone(e.target.value)}
+                        value={formData.phone || ""}
+                        onChange={(e) => setPhone(e.target.value)}
                         className="mt-1"
                       />
                     </div>
@@ -412,8 +418,8 @@ const ParkingSessions = () => {
                       <Label htmlFor="new-type">Account Type *</Label>
                       <select
                         id="new-type"
-                        value={formType}
-                        onChange={(e) => setFormType(e.target.value)}
+                        value={formData.type}
+                        onChange={(e) => setType(e.target.value)}
                         className="w-full mt-1 h-9 px-3 rounded-lg border border-border bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
                       >
                         {customerTypes.map((t) => (
@@ -439,7 +445,7 @@ const ParkingSessions = () => {
                     </Button>
                     <Button
                       onClick={() => createCustomerMutation.mutate()}
-                      disabled={!formName.trim() || !formPlate.trim() || createCustomerMutation.isPending}
+                      disabled={!formData.name.trim() || !formData.plate.trim() || createCustomerMutation.isPending}
                       className="flex-1"
                     >
                       {createCustomerMutation.isPending ? "Creating..." : "Create & Check In"}

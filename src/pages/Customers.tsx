@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Plus, Pencil, Trash2, ChevronDown } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
+import { validateCustomerForm } from "@/lib/schemas";
+import { useCustomerForm } from "@/hooks/useCustomerForm";
+import { useCustomerTypes } from "@/hooks/useCustomerTypes";
 
 interface Customer {
   id: number;
@@ -41,6 +44,9 @@ const Customers = () => {
     queryFn: () => apiFetch<Customer[]>("/api/customers"),
   });
 
+  const { customerTypes } = useCustomerTypes();
+  const { formData, setName, setEmail, setPlate, setPhone, setType, reset, setFromCustomer } = useCustomerForm(customerTypes[0]);
+
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All Types");
   const [showDropdown, setShowDropdown] = useState(false);
@@ -48,49 +54,20 @@ const Customers = () => {
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
 
-  const [formName, setFormName] = useState("");
-  const [formEmail, setFormEmail] = useState("");
-  const [formPlate, setFormPlate] = useState("");
-  const [formPhone, setFormPhone] = useState("");
-  const [formType, setFormType] = useState("Short-Term");
+  const types = useMemo(() => ["All Types", ...customerTypes], [customerTypes]);
 
-  const [customerTypes, setCustomerTypes] = useState<string[]>(["Short-Term", "Long-Term", "Annual"]);
-
-  useEffect(() => {
-    apiFetch<any[]>("/api/customer-types")
-      .then((rows) => {
-        const names = rows.map((r) => r.name).sort();
-        setCustomerTypes(names);
-      })
-      .catch(() => {
-        // ignore, keep defaults
-      });
-  }, []);
-
-  const types = ["All Types", ...customerTypes];
-
-  const filtered = customers.filter((c) => {
-    const matchesSearch =
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.plate.toLowerCase().includes(search.toLowerCase());
-    const matchesType = typeFilter === "All Types" || c.type === typeFilter;
-    return matchesSearch && matchesType;
-  });
-
-  const resetForm = () => {
-    setFormName(""); setFormEmail(""); setFormPlate(""); setFormPhone(""); setFormType("Short-Term");
-  };
-
-  const openAdd = () => { setEditIndex(null); resetForm(); setDialogOpen(true); };
-
-  const openEdit = (idx: number) => {
-    const c = customers[idx];
-    setEditIndex(idx); setFormName(c.name); setFormEmail(c.email); setFormPlate(c.plate);
-    setFormPhone(c.phone === "—" ? "" : c.phone); setFormType(c.type); setDialogOpen(true);
-  };
+  const filtered = useMemo(() => {
+    return customers.filter((c) => {
+      const matchesSearch =
+        c.name.toLowerCase().includes(search.toLowerCase()) ||
+        c.plate.toLowerCase().includes(search.toLowerCase());
+      const matchesType = typeFilter === "All Types" || c.type === typeFilter;
+      return matchesSearch && matchesType;
+    });
+  }, [customers, search, typeFilter]);
 
   const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
+    mutationFn: async (payload: Record<string, unknown>) => {
       return apiFetch<Customer>("/api/customers", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -100,13 +77,14 @@ const Customers = () => {
       toast.success("Customer added.");
       queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to add customer.");
+    onError: (err: Error) => {
+      const message = err instanceof ApiError ? err.message : "Failed to add customer.";
+      toast.error(message);
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: number; payload: any }) => {
+    mutationFn: async ({ id, payload }: { id: number; payload: Record<string, unknown> }) => {
       return apiFetch<Customer>(`/api/customers/${id}`, {
         method: "PUT",
         body: JSON.stringify(payload),
@@ -116,8 +94,9 @@ const Customers = () => {
       toast.success("Customer updated.");
       queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to update customer.");
+    onError: (err: Error) => {
+      const message = err instanceof ApiError ? err.message : "Failed to update customer.";
+      toast.error(message);
     },
   });
 
@@ -129,42 +108,78 @@ const Customers = () => {
       toast.success("Customer removed.");
       queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to delete customer.");
+    onError: (err: Error) => {
+      const message = err instanceof ApiError ? err.message : "Failed to delete customer.";
+      toast.error(message);
     },
   });
 
   const handleSave = () => {
-    if (!formName.trim() || !formEmail.trim() || !formPlate.trim()) {
-      toast.error("Please fill in Name, Email, and Plate fields.");
+    const validation = validateCustomerForm({
+      name: formData.name,
+      email: formData.email,
+      plate: formData.plate,
+      phone: formData.phone,
+      type: formData.type,
+    });
+
+    if (!validation.isValid) {
+      const errors = Object.entries(validation.errors);
+      if (errors.length > 0) {
+        toast.error(errors[0][1]?.[0] || "Please check your input");
+      }
       return;
     }
 
     const payload = {
-      name: formName.trim(),
-      email: formEmail.trim(),
-      phone: formPhone.trim() || undefined,
-      license_plate: formPlate.trim().toUpperCase(),
-      customer_type_name: formType,
+      name: formData.name,
+      email: formData.email,
+      phone: formData.phone || undefined,
+      license_plate: formData.plate,
+      customer_type_name: formData.type,
     };
 
     if (editIndex !== null) {
-      const id = customers[editIndex].id;
-      updateMutation.mutate({ id, payload });
+      const id = customers[editIndex]?.id;
+      if (id) {
+        updateMutation.mutate({ id, payload });
+      }
     } else {
       createMutation.mutate(payload);
     }
 
     setDialogOpen(false);
-    resetForm();
+    reset();
     setEditIndex(null);
   };
 
   const handleDelete = () => {
     if (deleteIndex === null) return;
-    const id = customers[deleteIndex].id;
-    deleteMutation.mutate(id);
+    const id = customers[deleteIndex]?.id;
+    if (id) {
+      deleteMutation.mutate(id);
+    }
     setDeleteIndex(null);
+  };
+
+  const openAdd = () => {
+    setEditIndex(null);
+    reset();
+    setDialogOpen(true);
+  };
+
+  const openEdit = (idx: number) => {
+    const c = customers[idx];
+    if (!c) return;
+    setEditIndex(idx);
+    setFromCustomer({
+      name: c.name,
+      email: c.email,
+      plate: c.plate,
+      phone: c.phone === "—" ? undefined : c.phone,
+      type: c.type,
+    });
+    setDialogOpen(true);
   };
 
   return (
@@ -217,20 +232,31 @@ const Customers = () => {
 
         {/* Mobile Card View */}
         <div className="block md:hidden space-y-3">
-          {filtered.map((c, fi) => {
+          {filtered.map((c) => {
             const realIndex = customers.findIndex((cu) => cu.id === c.id);
             return (
-              <div key={c.plate + realIndex} className="bg-card rounded-xl border border-border p-4 shadow-sm space-y-3">
+              <div
+                key={c.id}
+                className="bg-card rounded-xl border border-border p-4 shadow-sm space-y-3"
+              >
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="text-sm font-medium text-foreground">{c.name}</p>
                     <p className="text-xs text-muted-foreground">{c.email}</p>
                   </div>
                   <div className="flex items-center gap-1">
-                    <button onClick={() => openEdit(realIndex)} className="p-1.5 rounded-md hover:bg-accent transition-colors" title="Edit">
+                    <button
+                      onClick={() => openEdit(realIndex)}
+                      className="p-1.5 rounded-md hover:bg-accent transition-colors"
+                      title="Edit"
+                    >
                       <Pencil className="w-4 h-4 text-muted-foreground" />
                     </button>
-                    <button onClick={() => setDeleteIndex(realIndex)} className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors" title="Delete">
+                    <button
+                      onClick={() => setDeleteIndex(realIndex)}
+                      className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors"
+                      title="Delete"
+                    >
                       <Trash2 className="w-4 h-4 text-muted-foreground" />
                     </button>
                   </div>
@@ -249,8 +275,15 @@ const Customers = () => {
                     <p className="font-semibold text-foreground">{c.balance}</p>
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium w-fit" style={typeBadgeStyle(c.type)}>{c.type}</span>
-                    <span className={`w-fit ${c.status === "active" ? "badge-active" : "badge-expired"}`}>{c.status}</span>
+                    <span
+                      className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium w-fit"
+                      style={typeBadgeStyle(c.type)}
+                    >
+                      {c.type}
+                    </span>
+                    <span className={`w-fit ${c.status === "active" ? "badge-active" : "badge-expired"}`}>
+                      {c.status}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -264,20 +297,34 @@ const Customers = () => {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-6 py-3 bg-muted/30">Name</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">Plate</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30 hidden lg:table-cell">Phone</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">Type</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">Balance</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">Status</th>
-                  <th className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">Actions</th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-6 py-3 bg-muted/30">
+                    Name
+                  </th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">
+                    Plate
+                  </th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30 hidden lg:table-cell">
+                    Phone
+                  </th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">
+                    Type
+                  </th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">
+                    Balance
+                  </th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">
+                    Status
+                  </th>
+                  <th className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 bg-muted/30">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((c, fi) => {
+                {filtered.map((c) => {
                   const realIndex = customers.findIndex((cu) => cu.id === c.id);
                   return (
-                    <tr key={c.plate + realIndex} className="border-b border-border last:border-0 table-row-hover">
+                    <tr key={c.id} className="border-b border-border last:border-0 table-row-hover">
                       <td className="px-6 py-3.5">
                         <p className="text-sm font-medium text-foreground leading-tight">{c.name}</p>
                         <p className="text-xs text-muted-foreground leading-tight mt-0.5">{c.email}</p>
@@ -285,18 +332,33 @@ const Customers = () => {
                       <td className="px-4 py-3.5 text-sm font-mono text-muted-foreground">{c.plate}</td>
                       <td className="px-4 py-3.5 text-sm text-foreground hidden lg:table-cell">{c.phone}</td>
                       <td className="px-4 py-3.5">
-                        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium" style={typeBadgeStyle(c.type)}>{c.type}</span>
+                        <span
+                          className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+                          style={typeBadgeStyle(c.type)}
+                        >
+                          {c.type}
+                        </span>
                       </td>
                       <td className="px-4 py-3.5 text-sm font-semibold text-foreground">{c.balance}</td>
                       <td className="px-4 py-3.5">
-                        <span className={c.status === "active" ? "badge-active" : "badge-expired"}>{c.status}</span>
+                        <span className={c.status === "active" ? "badge-active" : "badge-expired"}>
+                          {c.status}
+                        </span>
                       </td>
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => openEdit(realIndex)} className="p-1.5 rounded-md hover:bg-accent transition-colors" title="Edit">
+                          <button
+                            onClick={() => openEdit(realIndex)}
+                            className="p-1.5 rounded-md hover:bg-accent transition-colors"
+                            title="Edit"
+                          >
                             <Pencil className="w-4 h-4 text-muted-foreground" />
                           </button>
-                          <button onClick={() => setDeleteIndex(realIndex)} className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors" title="Delete">
+                          <button
+                            onClick={() => setDeleteIndex(realIndex)}
+                            className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors"
+                            title="Delete"
+                          >
                             <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
                           </button>
                         </div>
@@ -315,54 +377,104 @@ const Customers = () => {
         <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editIndex !== null ? "Edit Customer" : "Add New Customer"}</DialogTitle>
-            <DialogDescription>{editIndex !== null ? "Update the customer details below." : "Fill in the details to add a new customer."}</DialogDescription>
+            <DialogDescription>
+              {editIndex !== null ? "Update the customer details below." : "Fill in the details to add a new customer."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-2">
               <Label htmlFor="name">Full Name *</Label>
-              <Input id="name" placeholder="e.g. John Smith" value={formName} onChange={(e) => setFormName(e.target.value)} />
+              <Input
+                id="name"
+                placeholder="e.g. John Smith"
+                value={formData.name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email *</Label>
-              <Input id="email" type="email" placeholder="e.g. john@email.com" value={formEmail} onChange={(e) => setFormEmail(e.target.value)} />
+              <Input
+                id="email"
+                type="email"
+                placeholder="e.g. john@email.com"
+                value={formData.email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="plate">License Plate *</Label>
-                <Input id="plate" placeholder="e.g. ABC123" value={formPlate} onChange={(e) => setFormPlate(e.target.value)} />
+                <Input
+                  id="plate"
+                  placeholder="e.g. ABC123"
+                  value={formData.plate}
+                  onChange={(e) => setPlate(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone</Label>
-                <Input id="phone" placeholder="e.g. 021..." value={formPhone} onChange={(e) => setFormPhone(e.target.value)} />
+                <Input
+                  id="phone"
+                  placeholder="e.g. 021..."
+                  value={formData.phone || ""}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="type">Customer Type</Label>
-              <select id="type" value={formType} onChange={(e) => setFormType(e.target.value)}
-                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                {customerTypes.map((t) => (<option key={t} value={t}>{t}</option>))}
+              <select
+                id="type"
+                value={formData.type}
+                onChange={(e) => setType(e.target.value)}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {customerTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2">
-              <Button variant="outline" onClick={() => setDialogOpen(false)} className="w-full sm:w-auto">Cancel</Button>
-              <Button onClick={handleSave} className="w-full sm:w-auto">{editIndex !== null ? "Save Changes" : "Add Customer"}</Button>
+              <Button
+                variant="outline"
+                onClick={() => setDialogOpen(false)}
+                className="w-full sm:w-auto"
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleSave} className="w-full sm:w-auto">
+                {editIndex !== null ? "Save Changes" : "Add Customer"}
+              </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
       {/* Delete Confirmation */}
-      <AlertDialog open={deleteIndex !== null} onOpenChange={(open) => { if (!open) setDeleteIndex(null); }}>
+      <AlertDialog
+        open={deleteIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteIndex(null);
+        }}
+      >
         <AlertDialogContent className="max-w-[90vw] sm:max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Customer</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to remove <strong>{deleteIndex !== null ? customers[deleteIndex]?.name : ""}</strong>? This action cannot be undone.
+              Are you sure you want to remove <strong>{deleteIndex !== null ? customers[deleteIndex]?.name : ""}</strong>?
+              This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col sm:flex-row">
             <AlertDialogCancel className="w-full sm:w-auto">Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="w-full sm:w-auto bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+            <AlertDialogAction
+              onClick={handleDelete}
+              className="w-full sm:w-auto bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

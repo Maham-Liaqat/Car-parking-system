@@ -16,6 +16,17 @@ export interface LoginResponse {
   };
 }
 
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public originalError?: unknown
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export function getAuthToken(): string | null {
   return window.localStorage.getItem("authToken");
 }
@@ -28,7 +39,7 @@ export function setAuthToken(token: string | null) {
   }
 }
 
-export async function apiFetch<T = any>(
+export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -38,7 +49,7 @@ export async function apiFetch<T = any>(
     ...(options.headers || {}),
   };
   if (token) {
-    (headers as any).Authorization = `Bearer ${token}`;
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -49,12 +60,12 @@ export async function apiFetch<T = any>(
   if (!res.ok) {
     let message = `Request failed with ${res.status}`;
     try {
-      const data = await res.json();
+      const data = await res.json() as { error?: string };
       if (data?.error) message = data.error;
     } catch {
       // ignore parse errors
     }
-    throw new Error(message);
+    throw new ApiError(res.status, message);
   }
 
   if (res.status === 204) {
