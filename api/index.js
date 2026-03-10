@@ -23,7 +23,13 @@ if (!hasDb) {
   });
 }
 
-const pool = getPool();
+let pool;
+let initError = null;
+try {
+  pool = getPool();
+} catch (e) {
+  initError = e;
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://carparksystem.vercel.app';
@@ -46,6 +52,24 @@ app.use(
     }
   })
 );
+
+// Health endpoint early, so it never crashes
+app.get('/health', (_req, res) => {
+  if (initError) {
+    const msg = typeof initError?.message === 'string' ? initError.message : String(initError);
+    return res.status(500).json({ status: 'error', error: msg });
+  }
+  res.json({ status: 'ok' });
+});
+
+// Guard to short-circuit when initialization failed
+app.use((req, res, next) => {
+  if (initError) {
+    const msg = typeof initError?.message === 'string' ? initError.message : String(initError);
+    return res.status(500).json({ error: 'API initialization failed', details: msg });
+  }
+  next();
+});
 
 const authMiddleware = (req, res, next) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
