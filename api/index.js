@@ -8,7 +8,6 @@ import dotenv from 'dotenv';
 // Use Postgres via Supabase in serverless
 const hasDb = !!process.env.DATABASE_URL;
 import { getPool, tx } from '../server/db.postgres.js';
-import { initScheduler, runStatementJob } from '../server/scheduler.js';
 
 dotenv.config();
 
