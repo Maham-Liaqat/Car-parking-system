@@ -1,3 +1,5 @@
+// server/schedular.js
+
 import cron from 'node-cron';
 import { getDb } from './db.js';
 import { sendStatementEmail } from './email.js';

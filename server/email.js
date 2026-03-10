@@ -1,3 +1,5 @@
+// server/email.js
+
 import nodemailer from 'nodemailer';
 
 let cachedTransporter = null;

@@ -1,3 +1,5 @@
+// server/db.postreg.js
+
 import { Pool } from 'pg';
 
 let pool;
