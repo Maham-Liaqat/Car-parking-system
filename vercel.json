@@ -3,7 +3,7 @@
   "framework": "vite",
   "functions": {
     "api/index.js": {
-      "runtime": "nodejs18.x"
+      "runtime": "@vercel/node"
     }
   },
   "rewrites": [
