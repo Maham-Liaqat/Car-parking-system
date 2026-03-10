@@ -1,11 +1,9 @@
-// In production we can just hit the same host under /api; when
-// VITE_API_BASE_URL is defined we respect it (useful for local dev or
-// external API), otherwise fall back to a relative path when building for
-// prod.  On dev we default to localhost:4000 which is what the local
-// backend uses.
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.PROD ? "" : "http://localhost:4000");
+// Determine API base URL
+// - Development: defaults to http://localhost:4000 (Express backend)
+// - Production: MUST be provided via VITE_API_BASE_URL (external backend)
+const isProd = import.meta.env.PROD;
+const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
+const API_BASE: string | null = envBase || (isProd ? null : "http://localhost:4000");
 
 export interface LoginResponse {
   token: string;
@@ -50,6 +48,14 @@ export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
+  if (!API_BASE) {
+    // Fail fast with actionable message in production when API base is not configured
+    throw new ApiError(
+      500,
+      "API base URL is not configured. Set VITE_API_BASE_URL to your backend URL in the environment."
+    );
+  }
+
   const token = getAuthToken();
   const headers: HeadersInit = {
     "Content-Type": "application/json",
